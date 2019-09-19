@@ -24,6 +24,15 @@ function noPeersConnectionError() {
   });
 }
 
+function downloadSnapshotError() {
+  dialog.showMessageBox(BrowserWindow.getFocusedWindow(), {
+    type: 'error',
+    title: 'Snapshot Error',
+    buttons: ['Ok'],
+    message: 'Could not download the snapshot!'    
+  });
+}
+
 function wagerrdStopped() {
   // dialog.showMessageBox( BrowserWindow.getFocusedWindow(),{
   //     type: 'error',
@@ -66,6 +75,7 @@ function wagerrdUnresponsive() {
 export default {
   deamonRunningError,
   noPeersConnectionError,
+  downloadSnapshotError,
   wagerrdStopped,
   wagerrdError,
   wagerrdUnresponsive

@@ -42,11 +42,25 @@ function resyncBlockchain() {
 }
 
 function restartWallet() {
-  ipcRenderer.send('restart-wagerrd');
+  ipcRenderer.send('restart-wagerrd', null, 'otroargs');
 }
 
 function noPeers() {
   ipcRenderer.send('no-peers');
+}
+
+function downloadSnapshotError() {
+  ipcRenderer.send('download-snapshot-error');
+}
+
+async function startDaemon() {
+  const res = await ipcRenderer.sendSync('launch');
+  return res;
+}
+
+async function stopDaemon() {
+  const res = await ipcRenderer.sendSync('stopDaemon');
+  return res;
 }
 
 export default {
@@ -61,5 +75,8 @@ export default {
   resyncBlockchain,
   restartWallet,
   noPeers,
-  runCommand
+  downloadSnapshotError,
+  runCommand,
+  stopDaemon,
+  startDaemon
 };

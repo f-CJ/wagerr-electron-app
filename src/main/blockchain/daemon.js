@@ -8,9 +8,12 @@ import { app, BrowserWindow, dialog } from 'electron';
 import errDialog from '../alerts/errors';
 import constants from '../constants/constants';
 import * as blockchain from './blockchain';
+import { spawnLogger } from '../logger/logger';
 
 const request = require('request');
 const packageJSON = require('../../../package.json');
+
+const logger = spawnLogger();
 
 export default class Daemon {
   wagerrdProcess;
@@ -56,30 +59,51 @@ export default class Daemon {
   }
 
   launch(args) {
-    const wagerrdPath = this.getExecutablePath('wagerrd');
-    const wagerrdArgs = this.getWagerrdArgs(args);
+    return new Promise(async resolve => {
+      let running = await this.isWagerrdRunning();
 
-    console.log(`\x1b[32m Launching daemon: ${wagerrdPath}\x1b[32m`);
-    console.log(`\x1b[32m Following args used: ${wagerrdArgs}\x1b[32m`);
+      logger.info('launch, is running?');
+      logger.info(running);
+      if (!running) {
+        const wagerrdPath = this.getExecutablePath('wagerrd');
+        const wagerrdArgs = this.getWagerrdArgs(args);
 
-    // Change file permissions so we can run the wagerrd.
-    fs.chmod(wagerrdPath, '0777', err => {
-      if (err) {
-        console.error(err);
+        logger.info(`\x1b[32m Launching daemon: ${wagerrdPath}\x1b[32m`);
+        logger.info(`\x1b[32m Following args used: ${wagerrdArgs}\x1b[32m`);
+
+        // Change file permissions so we can run the wagerrd.
+        fs.chmod(wagerrdPath, '0777', err => {
+          if (err) {
+            console.error(err);
+          }
+
+          // Spawn the wagerrd and attach event callbacks.
+          this.wagerrdProcess = spawn(wagerrdPath, wagerrdArgs);
+          this.wagerrdProcess.stdout.on('data', data =>
+            console.log(`Daemon: ${data}`)
+          );
+          this.wagerrdProcess.stderr.on('data', data =>
+            console.error(`Daemon: ${data}`)
+          );
+          this.wagerrdProcess.on('error', data => errDialog.wagerrdError(data));
+          this.wagerrdProcess.on('exit', data => errDialog.wagerrdStopped());
+        });
+
+        // Wait for wagerrd to start
+        while (!running) {
+          running = await this.isWagerrdRunning();
+          logger.info('is running? ' + running);
+        }
       }
 
-      // Spawn the wagerrd and attach event callbacks.
-      this.wagerrdProcess = spawn(wagerrdPath, wagerrdArgs);
-      this.wagerrdProcess.stdout.on('data', data =>
-        console.log(`Daemon: ${data}`)
-      );
-      this.wagerrdProcess.stderr.on('data', data =>
-        console.error(`Daemon: ${data}`)
-      );
-      this.wagerrdProcess.on('error', data => errDialog.wagerrdError(data));
-      this.wagerrdProcess.on('exit', data => errDialog.wagerrdStopped());
-    });
+      setTimeout(() => { 
+        resolve();
+      }, 2000);
+
+      // resolve();
+    });    
   }
+
 
   /**
    * Stop the wagerrd process.
@@ -87,23 +111,27 @@ export default class Daemon {
    * @returns {Promise<void>}
    */
   stop() {
+    console.log('DAEMON, STOP DAEMON!');
     return new Promise(async resolve => {
-      let running = true;
-      const cliPath = this.getExecutablePath('wagerr-cli');
+      let running = await this.isWagerrdRunning();
 
-      // Call wagerr cli to stop the wagerr daemon.
-      const wagerrcliProcess = spawn(cliPath, [
-        `-rpcuser=${blockchain.rpcUser}`,
-        `-rpcpassword=${blockchain.rpcPass}`,
-        `-rpcport=${blockchain.rpcPort}`,
-        'stop'
-      ]);
-      wagerrcliProcess.stdout.on('data', data =>
-        console.log(`Daemon: ${data}`)
-      );
-      // Wait while the wagerrd exits as this can varying in time.
-      while (running) {
-        running = await this.isWagerrdRunning();
+      if (running) {
+        const cliPath = this.getExecutablePath('wagerr-cli');
+
+        // Call wagerr cli to stop the wagerr daemon.
+        const wagerrcliProcess = spawn(cliPath, [
+          `-rpcuser=${blockchain.rpcUser}`,
+          `-rpcpassword=${blockchain.rpcPass}`,
+          `-rpcport=${blockchain.rpcPort}`,
+          'stop'
+        ]);
+        wagerrcliProcess.stdout.on('data', data =>
+          console.log(`Daemon: ${data}`)
+        );
+        // Wait while the wagerrd exits as this can varying in time.
+        while (running) {
+          running = await this.isWagerrdRunning();
+        }
       }
 
       resolve();

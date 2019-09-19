@@ -8,7 +8,7 @@
       <div class="col s12">
         <transition name="slide-fade" mode="out-in">
           <div :key="initText">
-            <h5>{{ initText }}</h5>
+            <h5>{{ initText }}{{ myText }}</h5>
           </div>
         </transition>
       </div>
@@ -22,7 +22,17 @@
         </div>
       </div>
 
-      <div class="splash-wallet-repair text-center">
+<!-- style="margin-bottom: 20px; height: 85px" -->
+      <div class="col s12" >
+        <download-snapshot 
+          v-if="mayDownloadSnapshot"
+          :sync-method="syncMethod" 
+          v-on:download="onDownloadSnapshot"
+          v-on:cancel="onDownloadSnapshotCancel"
+        />
+        </div>
+    </div>
+    <div class="splash-wallet-repair text-center">
         <div>
           <a href="#" @click="restartWallet">Restart Wallet</a>
         </div>
@@ -43,26 +53,40 @@
           <a href="#" @click="onOpenConf">Wagerr.Conf</a>
         </div>
       </div>
-    </div>
   </div>
 </template>
 
 <script>
-import { shell } from 'electron';
+import { remote, shell } from 'electron';
 import moment from 'moment';
-import { path } from 'path';
+import { path } from 'path'
+import fs from 'fs';
 import { mapActions, mapGetters } from 'vuex';
 import blockchainRPC from '../../services/api/blockchain_rpc';
 import networkRPC from '../../services/api/network_rpc';
 import ipcRenderer from '../../../common/ipc/ipcRenderer';
 import { getWagerrConfPath } from '../../../main/blockchain/blockchain';
+import DownloadSnapshot from './DownloadSnapshot.vue';
+import { blockchainSnapshot, syncMethods } from '../../../main/constants/constants';
+import { reconnect } from '../../services/api/wagerrRPC';
+
+
+const HOUR_IN_SECONDS = 60 * 60;
+const DAY_IN_SECONDS = 24 * 60 * 60;
+const WEEK_IN_SECONDS = 7 * 24 * 60 * 60;
+const YEAR_IN_SECONDS = 31556952; // Average length of year in Gregorian calendar.
 
 export default {
   name: 'SplashScreen',
+  components: { DownloadSnapshot },
 
   data() {
     return {
-      confPath: getWagerrConfPath()
+      confPath: getWagerrConfPath(),
+      syncMethod: syncMethods.SCAN_BLOCKS,
+      syncMethods: syncMethods,
+      mayDownloadSnapshot: false,
+      myText: ''
     };
   },
 
@@ -117,34 +141,77 @@ export default {
       ipcRenderer.closeWallet();
     },
 
-    getTimeBehindText: function(seconds, blockHeight) {
-      const HOUR_IN_SECONDS = 60 * 60;
-      const DAY_IN_SECONDS = 24 * 60 * 60;
-      const WEEK_IN_SECONDS = 7 * 24 * 60 * 60;
-      const YEAR_IN_SECONDS = 31556952; // Average length of year in Gregorian calendar.
+    onDownloadSnapshotCancel: async function() {      
+      this.updateInitText('Starting daemon...');
+      this.syncMethod = null;
 
+      // Without the timeout the app freezes before updating the init text to 'Starting dameon...'
+      // setTimeout(async function() { 
+        try {
+          console.log('start daemon');
+          await ipcRenderer.startDaemon();  
+          reconnect();
+          console.log('daemon started');
+          this.syncMethod = syncMethods.SCAN_BLOCKS;
+          
+        } catch(e) {        
+          remote.dialog.showMessageBox(remote.BrowserWindow.getFocusedWindow(), {
+            type: 'error',
+            title: 'Wagerr Daemon Error',
+            buttons: ['Ok'],
+            message: 'An error occurred when starting the daemon.',
+            detail: 'Please restart the application'
+          });
+
+          ipcRenderer.log('error', e);
+        }
+      // }.bind(this), 100);      
+    },
+
+
+    onDownloadSnapshot: function() {      
+      this.updateInitText('Stopping daemon...');
+      this.syncMethod = null;
+
+      // Without the timeout the app freezes before updating the init text to 'Stopping dameon...'
+      setTimeout(async function() { 
+        try {
+          await ipcRenderer.stopDaemon();  
+          this.syncMethod = syncMethods.DOWNLOAD_SNAPSHOT;
+
+        } catch(e) {        
+          this.syncMethod = syncMethods.SCAN_BLOCKS;
+
+          remote.dialog.showMessageBox(remote.BrowserWindow.getFocusedWindow(), {
+            type: 'error',
+            title: 'Wagerr Daemon Error',
+            buttons: ['Ok'],
+            message: 'An error occurred when stopping the daemon.',
+            detail: ''
+          });
+
+          ipcRenderer.log('error', e);
+        }
+      }.bind(this), 100);      
+    },    
+
+    getTimeBehindText: function(seconds, blockHeight) {      
       let timeBehindText;
       let years;
       let remainder;
 
-      if (Math.round(seconds / HOUR_IN_SECONDS) === 0) {
-        // Wallet is synced enough to allow user access.
-        this.updateWalletLoaded(true);
-      } else if (seconds < 2 * DAY_IN_SECONDS) {
+      if (seconds < 2 * DAY_IN_SECONDS) {
         timeBehindText =
           Math.round(seconds / HOUR_IN_SECONDS) +
-          ' hours behind, Scanning block ' +
-          blockHeight;
+          ' hours behind';
       } else if (seconds < 2 * WEEK_IN_SECONDS) {
         timeBehindText =
           Math.round(seconds / DAY_IN_SECONDS) +
-          ' days behind, Scanning block ' +
-          blockHeight;
+          ' days behind';
       } else if (seconds < YEAR_IN_SECONDS) {
         timeBehindText =
           Math.round(seconds / WEEK_IN_SECONDS) +
-          ' weeks behind, Scanning block ' +
-          blockHeight;
+          ' weeks behind';
       } else {
         years = seconds / YEAR_IN_SECONDS;
         remainder = seconds % YEAR_IN_SECONDS;
@@ -153,8 +220,7 @@ export default {
           Math.round(years) +
           ' year and ' +
           Math.round(remainder / WEEK_IN_SECONDS) +
-          ' weeks behind, Scanning block ' +
-          blockHeight;
+          ' weeks behind';
       }
 
       return timeBehindText;
@@ -215,27 +281,48 @@ export default {
       let bestBlockTimeDifference;
       let synced = false;
       let verificationProgress;
-
+      let userAnswer;
       ipcRenderer.log('info', 'Syncing blockchain');
+      
+      while (!synced) {        
+        if (this.syncMethod === syncMethods.SCAN_BLOCKS) {
+          let blockchainInfo = await blockchainRPC.getBlockchainInfo();
+          bestBlockHash = blockchainInfo.bestblockhash;
+          bestBlockHeight = blockchainInfo.blocks;
+          verificationProgress = blockchainInfo.verificationprogress;
 
-      while (!synced) {
-        let blockchainInfo = await blockchainRPC.getBlockchainInfo();
-        bestBlockHash = blockchainInfo.bestblockhash;
-        bestBlockHeight = blockchainInfo.blocks;
-        verificationProgress = blockchainInfo.verificationprogress;
+          let blockInfo = await blockchainRPC.getBlockInfo(bestBlockHash);
+          bestBlockTime = blockInfo.time;
+          bestBlockTimeDifference = moment().diff(bestBlockTime * 1000, 'seconds');
 
-        let blockInfo = await blockchainRPC.getBlockInfo(bestBlockHash);
-        bestBlockTime = blockInfo.time;
-        bestBlockTimeDifference = moment().diff(
-          bestBlockTime * 1000,
-          'seconds'
-        );
+          if (Math.round(bestBlockTimeDifference / HOUR_IN_SECONDS) === 0) {
+            // Wallet is synced enough to allow user access.
+            this.updateWalletLoaded(true);
 
-        let timeBehindText = this.getTimeBehindText(
-          bestBlockTimeDifference,
-          bestBlockHeight
-        );
-        this.updateInitText(timeBehindText);
+          } else {
+            let timeBehindText = this.getTimeBehindText(bestBlockTimeDifference, bestBlockHeight);
+            this.updateInitText(timeBehindText + ', Scanning block ' + bestBlockHeight);
+
+
+            let weeksBehind = Math.round(bestBlockTimeDifference / WEEK_IN_SECONDS);
+            if (weeksBehind > blockchainSnapshot.TRESHOLD_IN_WEEKS) {
+              this.mayDownloadSnapshot = true;        
+              if (userAnswer === undefined) {
+                userAnswer = remote.dialog.showMessageBox(remote.BrowserWindow.getFocusedWindow(), {
+                    type: 'question',
+                    buttons: ['Yes, download snapshot', 'No, sync normally'],
+                    message: `Your Wagerr wallet is ${timeBehindText}. \n\nDo you want us to download a snapshot of the blockchain to speed things up?\n`,
+                    cancelId: 1,
+                    defaultId: 0,
+                    detail: 'You can change your snapshot preferences in the settings section'
+                });
+      console.log('answer ' + userAnswer);
+
+
+              }
+            }
+          }
+        }
 
         // If verification progress is 1 or above it means the daemon is synced.
         if (verificationProgress >= 1) {
@@ -267,10 +354,14 @@ export default {
     // fail to launch in some instances. Dirty workaround to allow 10 seconds
     // before moving to the RPC calls.
     // TODO: Implement a cleaner solution.
-    await this.sleep(10000);
+    // await this.sleep(10000);
+
+    // TODO make this call just in development?
+    // await ipcRenderer.startDaemon();
+    // reconnect();
 
     // Check if connected to the Wagerr network and if we have peers.
-    await this.checkPeerStatus();
+    await this.checkPeerStatus();   
 
     // Set the network.
     let blockchainInfo = await blockchainRPC.getBlockchainInfo();

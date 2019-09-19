@@ -21,12 +21,58 @@ if (walletProperties.get('rpcport')) {
   rpcPort = walletProperties.get('rpcport');
 }
 
-export default {
-  client: new WagerrdRPC({
+let client = new WagerrdRPC({
+  protocol: 'http',
+  user: rpcUser,
+  pass: rpcPass,
+  host: '127.0.0.1',
+  port: rpcPort
+});
+
+let client2 = new WagerrdRPC({
+  protocol: 'http',
+  user: rpcUser,
+  pass: rpcPass,
+  host: '127.0.0.1',
+  port: rpcPort
+});
+
+export const reconnect = () => {
+
+const rpcUser = ipcRenderer.sendSync('rpc-username');
+const rpcPass = ipcRenderer.sendSync('rpc-password');
+
+// Check if testnet=1 in wagerr.conf
+const walletProperties = PropertiesReader(getWagerrConfPath());
+const testnet = walletProperties.get('testnet');
+
+// Assign RPC port number according to defaults or grab from wagerr.conf
+let rpcPort = testnet ? '55005' : '55003';
+
+if (walletProperties.get('rpcport')) {
+  rpcPort = walletProperties.get('rpcport');
+}
+
+  console.log('launch reconnect');
+  client = new WagerrdRPC({
     protocol: 'http',
     user: rpcUser,
     pass: rpcPass,
     host: '127.0.0.1',
     port: rpcPort
-  })
+  });
+};
+
+export default {
+  client,
+  newClient: function() {
+    return new WagerrdRPC({
+      protocol: 'http',
+      user: rpcUser,
+      pass: rpcPass,
+      host: '127.0.0.1',
+      port: rpcPort
+    });
+  },
+  client2
 };

@@ -152,6 +152,9 @@ async function createMainWindow() {
  */
 export async function init(args) {
   logger.info('Initialising Wagerr Electron App');
+  logger.info('Args are ');
+  logger.info(args);
+
   daemon = new Daemon();
 
   // Check if the wagerrd binary exists.
@@ -243,6 +246,13 @@ ipcMain.on('runCommand', async (event, arg) => {
   event.returnValue = await daemon.runCommand(arg);
 });
 
+ipcMain.on('launch', async (event) => {
+  event.returnValue = await daemon.launch();
+});
+
+ipcMain.on('stopDaemon', async (event, arg) => {
+  event.returnValue = await daemon.stop();
+});
 /**
  * Encrypt wallet IPC handlers
  */
@@ -252,6 +262,7 @@ ipcMain.on('encrypt-wallet', async (event, arg) => {
   await mainWindow.close();
   await init(arg);
 });
+
 
 /**
  * Wallet repair main IPC handlers
@@ -411,7 +422,11 @@ ipcMain.on('resync-blockchain', async (event, arg) => {
 });
 
 // Handles the render process of resyncing the blockchain.
-ipcMain.on('restart-wagerrd', async (event, arg) => {
+ipcMain.on('restart-wagerrd', async (event, arg, arg2) => {
+  logger.info('Restart wallet');
+  logger.info(arg);
+  logger.info(arg2);
+  
   const cancel = dialog.showMessageBox(BrowserWindow.getFocusedWindow(), {
     type: 'question',
     buttons: ['Confirm', 'Cancel'],
@@ -428,7 +443,8 @@ ipcMain.on('restart-wagerrd', async (event, arg) => {
       logger.warn('wagerrd may not have shutdown correctly.');
     });
     await mainWindow.close();
-    await init(arg);
+    await init();
+    // await init(arg);
   }
 });
 
@@ -446,6 +462,12 @@ ipcMain.on('rpc-password', event => {
 ipcMain.on('no-peers', () => {
   errors.noPeersConnectionError();
 });
+
+// Show error dialog informing user that the wallet could not download the blockchain snapshot.
+ipcMain.on('download-snapshot-error', () => {
+  errors.downloadSnapshotError();
+});
+
 
 ipcMain.on('log-message', (event, ...args) => {
   logger.log(...args);
